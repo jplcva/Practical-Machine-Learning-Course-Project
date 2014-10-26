@@ -1,0 +1,223 @@
+---
+title: "Practical Machine Learning - Course Project"
+output:
+  html_document:
+    fig_height: 4
+---
+
+
+```{r setoptions, echo=FALSE, results='hide', message=FALSE, warning=FALSE, error=FALSE}
+
+## Load the needed library for this R Markdown file
+library(caret)
+library(ggplot2)
+library(grid)
+library(gridExtra)
+library(knitr)
+library(pROC)
+library(xtable)
+
+## Always echo the R code in the chunks
+opts_chunk$set(cache=FALSE, echo=FALSE, results='markup', message=FALSE, warning=FALSE, error=FALSE)
+```
+
+
+### Synopsis
+
+This is the course project for the Practical Machine Learning class. The goal of the project is to perform prediction on a data set representing metrics associated to a weigh lifting exercise. The data has been collected during the [Human Activity Recognition](http://groupware.les.inf.puc-rio.br/har.) project, from accelerometers on the belt, forearm, arm, and dumbell of 6 participants, who were asked to perform barbell lifts correctly and incorrectly in 5 different ways. The data set contains the `classe` colunm, representing the outcome to predict. `classe` is a factor variable with 5 levels "A", "B", "C", "D" and "E".
+
+Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+
+**Aknowledgments:** Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements. Proceedings of 21st Brazilian Symposium on Artificial Intelligence. Advances in Artificial Intelligence - SBIA 2012. In: Lecture Notes in Computer Science. , pp. 52-61. Curitiba, PR: Springer Berlin / Heidelberg, 2012. ISBN 978-3-642-34458-9. DOI: 10.1007/978-3-642-34459-6_6.
+
+Read more: http://groupware.les.inf.puc-rio.br/har#ixzz3HBu57iZh
+
+
+### Getting and Cleaning Data
+
+The training data for this project are available here: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv. The training data set will be used to build the prediction model.
+
+The test data are available here: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv. The test data set will be used in the **Prediction Assignment Submission** section of the Course Project. It is composed of 20 test cases on which the built machine learning algorithm will be applied.
+
+```{r getandcleandata, echo=TRUE, results='markup'}
+
+## Create the data directory, in case needed
+if (file.exists("./data") == FALSE) {
+        dir.create("./data")
+}
+
+## Download the "pml-training.csv" file, in case needed
+if (file.exists("./data/pml-training.csv") == FALSE) {
+        download.file(url = "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",
+                      destfile = "./data/pml-training.csv", method = "curl", quiet = TRUE)
+}
+
+## Read the "pml-training.csv" to a data frame and report its dimensions
+pml.training <- read.csv("./data/pml-training.csv")
+dim(pml.training)
+```
+
+
+### Exploratory Data Analysis
+
+The `pml.training` data set is composed of `r ncol(pml.training)` columns that can be categorized in 6 distinct groups:
+
+1. The first 7 columns `(`r head(names(pml.training), 7)`)` represent information of who and when the experiment was conducted.
+2. The following 38 columns with the `_belt` suffix `(`r head(grep(pattern = "_belt", names(pml.training), value = TRUE))`, ...)`, represent the metrics related to the lumber belt sensor.
+3. The following 38 columns with the `_arm` suffix `(`r head(grep(pattern = "_arm", names(pml.training), value = TRUE))`, ...)`, represent the metrics related to the armband sensor.
+4. The following 38 columns with the `_dumbbell` suffix `(`r head(grep(pattern = "_dumbbell", names(pml.training), value = TRUE))`, ...)`, represent the metrics related to the dumbbell sensor.
+5. The following 38 columns with the `_forearm` suffix `(`r head(grep(pattern = "_forearm", names(pml.training), value = TRUE))`, ...)`, represent the metrics related to the glove sensor.
+6. The last column `(`r tail(names(pml.training), 1)`)` represent the outcome, how well the experiment was conducted.
+
+A first approach to identify the model's predictors is performed through exploratory plots. Since the `classe` outcome is qualitative and not continuous, box plots are used to compare numeric features grouped by classes. The following plot aggregates 4 box plots for the `total_accel_belt`, `total_accel_arm`, `total_accel_dumbbell` and `total_accel_forearm` features:
+
+```{r exploredata1, echo=FALSE, results='markup', fig.height=5, fig.width=7}
+
+## Quick plot total accelerometer by sensor and class
+q1 <- qplot(classe, total_accel_belt, data = pml.training, fill = classe, geom = "boxplot")
+q2 <- qplot(classe, total_accel_arm, data = pml.training, fill = classe, geom = "boxplot")
+q3 <- qplot(classe, total_accel_dumbbell, data = pml.training, fill = classe, geom = "boxplot")
+q4 <- qplot(classe, total_accel_forearm, data = pml.training, fill = classe, geom = "boxplot")
+
+## Arrange the plots in a table
+grid.arrange(q3, q4, q1, q2, main = "Total accelerometer compared by sensor and class", as.table = TRUE)
+```
+
+Since the experiment is mainly physical, it is interesting to compare the Euler angles (roll, pitch and yaw) sensors' metrics, by class, to identify whether these features would be good predictors. To do so, the measures are compounded together by sensor `(roll * pitch * yaw)` and compared by pairs. The following figure shows the results:
+
+```{r exploredata2, echo=FALSE, results='markup', fig.height=7, fig.width=7}
+
+## Compound Euler angles (roll, pitch and yaw) and compared by pairs and class
+g1 <- ggplot(data = pml.training,
+             aes(roll_belt * pitch_belt * yaw_belt, roll_arm * pitch_arm * yaw_arm)) +
+        geom_point(aes(col = classe)) + facet_grid(. ~ classe) +
+        labs(x = "roll_belt * pitch_belt * yaw_belt vs.\nroll_arm * pitch_arm * yaw_arm", y = "") +
+        theme(axis.text.x = element_blank(), axis.text.y = element_blank(),
+              axis.title.x = element_text(size = rel(0.8)), legend.position = "none")
+g2 <- ggplot(data = pml.training,
+             aes(roll_belt * pitch_belt * yaw_belt, roll_dumbbell * pitch_dumbbell * yaw_dumbbell)) +
+        geom_point(aes(col = classe)) + facet_grid(. ~ classe) +
+        labs(x = "roll_belt * pitch_belt * yaw_belt vs.\nroll_dumbbell * pitch_dumbbell * yaw_dumbbell", y = "") +
+        theme(axis.text.x = element_blank(), axis.text.y = element_blank(),
+              axis.title.x = element_text(size = rel(0.8)), legend.position = "none")
+g3 <- ggplot(data = pml.training,
+             aes(roll_belt * pitch_belt * yaw_belt, roll_forearm * pitch_forearm * yaw_forearm)) +
+        geom_point(aes(col = classe)) + facet_grid(. ~ classe) +
+        labs(x = "roll_belt * pitch_belt * yaw_belt vs.\nroll_forearm * pitch_forearm * yaw_forearm", y = "") +
+        theme(axis.text.x = element_blank(), axis.text.y = element_blank(),
+              axis.title.x = element_text(size = rel(0.8)), legend.position = "none")
+g4 <- ggplot(data = pml.training,
+             aes(roll_arm * pitch_arm * yaw_arm, roll_dumbbell * pitch_dumbbell * yaw_dumbbell)) +
+        geom_point(aes(col = classe)) + facet_grid(. ~ classe) +
+        labs(x = "roll_arm * pitch_arm * yaw_arm vs.\nroll_dumbbell * pitch_dumbbell * yaw_dumbbell", y = "") +
+        theme(axis.text.x = element_blank(), axis.text.y = element_blank(),
+              axis.title.x = element_text(size = rel(0.8)), legend.position = "none")
+g5 <- ggplot(data = pml.training,
+             aes(roll_arm * pitch_arm * yaw_arm, roll_forearm * pitch_forearm * yaw_forearm)) +
+        geom_point(aes(col = classe)) + facet_grid(. ~ classe) +
+        labs(x = "roll_arm * pitch_arm * yaw_arm vs.\nroll_forearm * pitch_forearm * yaw_forearm", y = "") +
+        theme(axis.text.x = element_blank(), axis.text.y = element_blank(),
+              axis.title.x = element_text(size = rel(0.8)), legend.position = "none")
+g6 <- ggplot(data = pml.training,
+             aes(roll_dumbbell * pitch_dumbbell * yaw_dumbbell, roll_forearm * pitch_forearm * yaw_forearm)) +
+        geom_point(aes(col = classe)) + facet_grid(. ~ classe) +
+        labs(x = "roll_dumbbell * pitch_dumbbell * yaw_dumbbell vs.\nroll_forearm * pitch_forearm * yaw_forearm", y = "") +
+        theme(axis.text.x = element_blank(), axis.text.y = element_blank(),
+              axis.title.x = element_text(size = rel(0.8)), legend.position = "none")
+
+## Arrange the plots in a table
+grid.arrange(g5, g6, g3, g4, g1, g2,
+             main = "Compounded Euler angles (roll, pitch and yaw) compared by pairs and class",
+             as.table = TRUE)
+```
+
+
+### Predictors Selection
+
+To confirm the empirical exploratory analysis, the data set will be reduced to significant columns, representing significant features that could act as predictors. To do so, the `nearZeroVar()` function of the `caret` package is used to identify then trim the data set. Following that, all columns with at least one NA are also removed from the data set.
+
+```{r selectpredictors, echo=TRUE, results='markup'}
+
+## Remove near zero variance predictors from the data set
+nzv <- nearZeroVar(x = pml.training, saveMetrics = FALSE)
+pml.training <- pml.training[, -nzv]
+
+## Create the nacols function that identifies all columns in a data frame holding at least one NA
+nacols <- function(df) {
+        colnames(df)[unlist(lapply(df, function(x) any(is.na(x))))]
+}
+
+## Remove at-least-one NA columns from the data set
+cols <- c(NULL)
+for (i in 1:length(nacols(pml.training))) {
+        cols <- c(cols, which(colnames(pml.training) == nacols(pml.training)[i]))
+}
+pml.training <- pml.training[, -cols]
+
+## Report the trimmed data set dimensions
+dim(pml.training)
+```
+
+
+### Data Partitioning
+
+The `pml.training` data set reduced to `r ncol(pml.training)` significant columns, will now be partitioned to a `training` and `testing` data sets, in order to build and train a prediction model and test it. The provided `pml.testing.csv` composed of 20 test cases will serve as validation in the **Prediction Assignment Submission** section of the Course Project. Based on the exploratory data analysis and consequent to the data set trimming, the Euler angles (roll, pitch and yaw) sensors' metrics as well as the total accelerometers are used as predictors. The `train()` function of the `caret` package is called with its default values, in order to fit a predictive model with 16 predictors.
+
+```{r partdata, echo=TRUE, results='markup'}
+
+## Partition the data set in 60% training and 40% testing and report the dimensions
+inTrain <- createDataPartition(y = pml.training$classe, p = 0.6, list = FALSE)
+training <- pml.training[inTrain, ]
+testing <- pml.training[-inTrain, ]
+dim(training); dim(testing)
+
+## Fit a Random Forest model with the selected predictors and default values for train
+modFit <- train(classe ~ roll_belt + pitch_belt + yaw_belt + total_accel_belt +
+                        roll_arm + pitch_arm + yaw_arm + total_accel_arm +
+                        roll_dumbbell + pitch_dumbbell + yaw_dumbbell + total_accel_dumbbell +
+                        roll_forearm + pitch_forearm + yaw_forearm + total_accel_forearm,
+                method = "rf", data = training)
+```
+
+
+### Model Assessment
+
+A view of `modFit` shows that the `train()` function fitted the Random Forest model with no pre-processing, and 25 bootstrapped repetitions of resampling for identical sample sizes of `11776`. Amongst the 16 given predictors, `train()` selected an optimal model with 9 predictors based on the highest accuracy of `0.982`.
+
+Also, a call to `modFit$finalModel` confirms the number of variables tried at each split (9), and reports the OOB (Out-Of-Bag) estimate of error rate of `1.24%`. Also, the confusion matrix is given on the `training` data set. One property of random forests indicates that there is no need for cross-validation or a separate test set to get an unbiased estimate of the test set error. It is estimated internally, during the run.
+
+```{r assessmodel1, echo=TRUE, results='markup'}
+modFit
+modFit$finalModel
+```
+
+The following plots confirm optimal model with 9 predictors based on the highest bootstrapped accuracy of `0.982`, and show the 16 predictors, ranked by their importance in the model selection. It is interesting to note that the within the 4 most significant predictors, the 3 Euler angles metrics for the lumber belt sensor `(roll_belt, yaw_belt and pitch_belt)` are present, confirming the exploratory data analysis.
+
+```{r assessmodel2, echo=TRUE, results='markup'}
+plot.train(modFit)
+plot(varImp(modFit))
+```
+
+The following plot display the Receiver Operating Characteristic (ROC) curve for the 5 different classes with "A" in `red`, "B" in `wheat`, "C" in `green`, "D" in `cyan` and "E" in `magenta`. The ROC curves are plotted in reverse order in order to highlight the plot for the "A" class that overlaps the plot for the "B" class.
+
+```{r assessmodel3, echo=TRUE, results='markup'}
+roc5 <- roc(testing$classe, predict(modFit, testing, type = "prob")[, "E"],
+            col = "magenta", plot = TRUE)
+roc4 <- roc(testing$classe, predict(modFit, testing, type = "prob")[, "D"],
+            col = "cyan", plot = TRUE, add = TRUE)
+roc3 <- roc(testing$classe, predict(modFit, testing, type = "prob")[, "C"],
+            col = "green", plot = TRUE, add = TRUE)
+roc2 <- roc(testing$classe, predict(modFit, testing, type = "prob")[, "B"],
+            col = "wheat", plot = TRUE, add = TRUE)
+roc1 <- roc(testing$classe, predict(modFit, testing, type = "prob")[, "A"],
+            col = "red", plot = TRUE, add = TRUE, print.thres = .5)
+```
+
+
+### Data Prediction
+
+Finally, the model is used to predict the outcome on the testing data set and the confusion matrix and relevant statistics are shows in the `confusionMatrix()` function of the `caret` package. The overall accuracy is significantly high with a value of `0.9865` with a 95% Confidence Interval of `[0.9837, 0.9889]`.
+
+```{r predictdata, echo=TRUE, results='markup'}
+confusionMatrix(testing$classe, predict(modFit, testing))
+```
